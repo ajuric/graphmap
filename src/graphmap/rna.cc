@@ -49,6 +49,8 @@ struct MyCluster {
 
 #define MAXN 3001
 #define STRANDS 2
+/// popraviti ovaj delimiter!!! na 500
+#define ALG_DELIMITER 500
 
 struct fnw_data {
 	int index;
@@ -114,10 +116,190 @@ void calculateFNW(fnw *F, fnw_data *bothStrandSols, std::vector<MyCluster> *clus
 	}
 }
 
+void calculateDP(int **dp, int **backtrack, std::vector<MyCluster> *clusters) {
+	for (int strand = 0; strand < STRANDS; strand++) {
+		if (clusters[strand].size() == 0) {
+			continue;
+		}
+		for (int n = clusters[strand].size(), x = n; x >= 0; x--) {
+			int index = x - 1;
+			int64_t xLeft = (index == -1) ? 0 : clusters[strand][index].readEnd, yLeft = (index == -1) ? 0 : clusters[strand][index].refEnd;
+			int &ref = dp[strand][x];
+			for (int i = x; i < n; i++) {
+				if (clusters[strand][i].readStart < xLeft || clusters[strand][i].refStart < yLeft) {
+					continue;
+				}
+				int tmp = clusters[strand][i].coveredBases + dp[strand][i + 1];
+				if (tmp > ref) {
+					backtrack[strand][x] = i + 1;
+					ref = tmp;
+				}
+			}
+		}
+	}
+}
+
 void empty_clusters(std::vector<MyCluster> *clusters) {
   for (int strand = 0; strand < STRANDS; strand++) {
   	clusters[strand].clear();
   }
+}
+
+void algorithmFnw(std::vector<MyCluster> *clusters, std::vector<Cluster*> *cluster_data) {
+
+  std::set<int64_t> xCoord[STRANDS], yCoord[STRANDS];
+
+	// sorting coordinates
+	for (int strand = 0; strand < STRANDS; strand++) {
+		for (int i = 0, n = (int) clusters[strand].size(); i < n; i++) {
+			xCoord[strand].insert(clusters[strand][i].readStart); xCoord[strand].insert(clusters[strand][i].readEnd);
+			yCoord[strand].insert(clusters[strand][i].refStart);  yCoord[strand].insert(clusters[strand][i].refEnd);
+		}
+	}
+
+	// move from set to vector	
+	std::vector<int64_t> sortedXCoord[STRANDS];
+  std::vector<int64_t> sortedYCoord[STRANDS];
+	for (int strand = 0; strand < STRANDS; strand++) {
+		sortedXCoord[strand] = std::vector<int64_t>(xCoord[strand].begin(), xCoord[strand].end());
+		sortedYCoord[strand] = std::vector<int64_t>(yCoord[strand].begin(), yCoord[strand].end());
+	}
+
+	// calculate compressed coordinates
+	for (int strand = 0; strand < STRANDS; strand++) {
+		for (int i = 0, d = clusters[strand].size(); i < d; i++) {
+			clusters[strand][i].x1 = lower_bound(sortedXCoord[strand].begin(), sortedXCoord[strand].end(), clusters[strand][i].readStart) - sortedXCoord[strand].begin() + 1;
+			clusters[strand][i].y1 = lower_bound(sortedYCoord[strand].begin(), sortedYCoord[strand].end(), clusters[strand][i].refStart)  - sortedYCoord[strand].begin() + 1;
+			clusters[strand][i].x2 = lower_bound(sortedXCoord[strand].begin(), sortedXCoord[strand].end(), clusters[strand][i].readEnd)   - sortedXCoord[strand].begin() + 1;
+			clusters[strand][i].y2 = lower_bound(sortedYCoord[strand].begin(), sortedYCoord[strand].end(), clusters[strand][i].refEnd)    - sortedYCoord[strand].begin() + 1;
+		}
+	}
+	
+	// prepare data
+  int **backtrack = (int **) calloc(STRANDS, sizeof(int));
+  fnw *F = (fnw *) calloc(STRANDS, sizeof(fnw));
+  fnw_data *bothStrandSols = (fnw_data *) calloc(STRANDS, sizeof(fnw_data));
+  for (int strand = 0; strand < STRANDS; strand++) {
+  	backtrack[strand] = (int *) calloc(MAXN, sizeof(int));
+  	//memset(backtrack[strand], -1, sizeof(backtrack[strand]));
+  	for (int i = 0; i < MAXN; i++) {
+  		backtrack[strand][i] = -1;
+  	}
+  }
+  
+  // calculate sol
+  calculateFNW(F, bothStrandSols, clusters, backtrack);
+  int strand = (bothStrandSols[0].value >= bothStrandSols[1].value) ? 0 : 1;
+  fnw_data sol = std::max(bothStrandSols[0], bothStrandSols[1]);
+  
+  // reconstruct used clusters
+  std::set<int>	done;
+  int curr = sol.index;
+  while (true) {
+  	if (curr == -1) {
+  		break;
+  	}
+  	if (done.count(curr) > 0) {
+  		printf ("vec obisao!!!!\n");
+  		//printf ("\nnumber of regions: %d\n", mapping_data->intermediate_mappings.size());
+  		//empty_clusters();
+  		//return 0;  	
+  	}
+  	done.insert(curr);
+  	int currClusterIndex = curr;
+  	if (curr == backtrack[strand][curr]) {
+  		printf ("sljedeci je bas isti!!!\n");
+  		//printf ("\nnumber of regions: %d\n", mapping_data->intermediate_mappings.size());
+  		//empty_clusters();
+  		//return 0;
+  	}
+  	int i = clusters[strand][currClusterIndex].regionI;
+  	int j = clusters[strand][currClusterIndex].clusterJ;
+  	//printf ("i: %d, j: %d\n", i, j);
+		////#XY printf ("curr: %d\n", curr);
+  	/*printf ("readStart: %lld, readEnd: %lld, refStart: %lld, refEnd: %lld, coveredBases: %d, i: %d, j: %d\n",
+  		clusters[strand][currClusterIndex].readStart,
+  		clusters[strand][currClusterIndex].readEnd,
+  		clusters[strand][currClusterIndex].refStart,
+  		clusters[strand][currClusterIndex].refEnd,
+  		clusters[strand][currClusterIndex].coveredBases,
+  		clusters[strand][currClusterIndex].regionI,
+  		clusters[strand][currClusterIndex].clusterJ);*/
+  	////#XY printf ("backtrack[strand][curr]: %d\n", backtrack[strand][curr]);
+  	
+  	cluster_data[i][j]->valid = true;
+  	if (backtrack[strand][curr] == -1) {
+  		break;
+  	}
+  	curr = backtrack[strand][curr];
+  }
+  
+  free(backtrack);
+  free(F);
+  free(bothStrandSols);
+}
+
+void algorithmKnapsack(std::vector<MyCluster> *clusters, std::vector<Cluster*> *cluster_data) {
+
+	// prepare data
+	int **dp = (int **) calloc(STRANDS, sizeof(int));
+  int **backtrack = (int **) calloc(STRANDS, sizeof(int));
+  for (int strand = 0; strand < STRANDS; strand++) {
+  	dp[strand] = (int *) calloc(MAXN, sizeof(int));
+  	backtrack[strand] = (int *) calloc(MAXN, sizeof(int));
+  	//memset(backtrack[strand], -1, sizeof(backtrack[strand]));
+  	for (int i = 0; i < MAXN; i++) {
+  		backtrack[strand][i] = -1;
+  	}
+  }
+  
+  // calculate sol
+  calculateDP(dp, backtrack, clusters);
+	int strand = (dp[0][0] > dp[1][0]) ? 0 : 1;
+	
+	// reconstruct used clusters
+	std::set<int>	done;
+  int curr = backtrack[strand][0];
+  while (true) {
+  	if (curr == -1) {
+  		break;
+  	}
+  	if (done.count(curr) > 0) {
+  		printf ("vec obisao!!!!\n");
+  		//printf ("\nnumber of regions: %d\n", mapping_data->intermediate_mappings.size());
+  		//empty_clusters();
+  		//return 0;  	
+  	}
+  	done.insert(curr);
+  	int currClusterIndex = curr - 1;
+  	if (curr == backtrack[strand][curr]) {
+  		printf ("sljedeci je bas isti!!!\n");
+  		//printf ("\nnumber of regions: %d\n", mapping_data->intermediate_mappings.size());
+  		//empty_clusters();
+  		//return 0;
+  	}
+  	int i = clusters[strand][currClusterIndex].regionI;
+  	int j = clusters[strand][currClusterIndex].clusterJ;
+  	//printf ("i: %d, j: %d\n", i, j);
+  	////#XY printf ("curr: %d\n", curr);
+  	/* printf ("readStart: %lld, readEnd: %lld, refStart: %lld, refEnd: %lld, coveredBases: %d, i: %d, j: %d\n",
+  		clusters[strand][currClusterIndex].readStart,
+  		clusters[strand][currClusterIndex].readEnd,
+  		clusters[strand][currClusterIndex].refStart,
+  		clusters[strand][currClusterIndex].refEnd,
+  		clusters[strand][currClusterIndex].coveredBases,
+  		clusters[strand][currClusterIndex].regionI,
+  		clusters[strand][currClusterIndex].clusterJ);*/
+  	////#XY printf ("backtrack[strand][curr]: %d\n", backtrack[strand][curr]);
+  	
+  	cluster_data[i][j]->valid = true;
+  	if (backtrack[strand][curr] == -1) {
+  		break;
+  	}
+  	curr = backtrack[strand][curr];
+  }
+  free(backtrack);
+  free(dp);
 }
 
 // This function filters clusters in different mapping regions, to preserve only the ones which might be construed as valid RNA-seq mappings.
@@ -134,7 +316,6 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
   int64_t read_len = read->get_sequence_length();
 
   std::set<MyCluster> clusterSet[STRANDS];
-  std::set<int64_t> xCoord[STRANDS], yCoord[STRANDS];
 	std::vector<MyCluster> clusters[STRANDS];
 	
 	if (mapping_data->intermediate_mappings.size() == 0) {
@@ -177,9 +358,6 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
 			
 			/*printf ("readStart: %lld, readEnd: %lld, refStart: %lld, refEnd: %lld, coveredBases: %d, i: %d, j: %d\n", cluster.query.start, cluster.query.end, cluster.ref.start, cluster.ref.end,
 					cluster.coverage, i, j);*/
-					
-			xCoord[reverseStrand].insert(cluster.query.start); xCoord[reverseStrand].insert(cluster.query.end);
-			yCoord[reverseStrand].insert(cluster.ref.start);  yCoord[reverseStrand].insert(cluster.ref.end);
 
       // Members of Cluster contain these values:
       // cluster.query.start
@@ -194,12 +372,6 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
   
   ////#XY printf ("\nprosli sve clustere - krece racunanje\n");
   
-  std::vector<int64_t> sortedXCoord[STRANDS];
-  std::vector<int64_t> sortedYCoord[STRANDS];
-	for (int strand = 0; strand < STRANDS; strand++) {
-		sortedXCoord[strand] = std::vector<int64_t>(xCoord[strand].begin(), xCoord[strand].end());
-		sortedYCoord[strand] = std::vector<int64_t>(yCoord[strand].begin(), yCoord[strand].end());
-	}
 	
 	int emptySets = 0;
   for (int strand = 0; strand < STRANDS; strand++) {
@@ -220,39 +392,25 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
 		//empty_clusters();
 		return 0;
 	}
-	
-	for (int strand = 0; strand < STRANDS; strand++) {
-		for (int i = 0, d = clusters[strand].size(); i < d; i++) {
-			clusters[strand][i].x1 = lower_bound(sortedXCoord[strand].begin(), sortedXCoord[strand].end(), clusters[strand][i].readStart) - sortedXCoord[strand].begin() + 1;
-			clusters[strand][i].y1 = lower_bound(sortedYCoord[strand].begin(), sortedYCoord[strand].end(), clusters[strand][i].refStart)  - sortedYCoord[strand].begin() + 1;
-			clusters[strand][i].x2 = lower_bound(sortedXCoord[strand].begin(), sortedXCoord[strand].end(), clusters[strand][i].readEnd)   - sortedXCoord[strand].begin() + 1;
-			clusters[strand][i].y2 = lower_bound(sortedYCoord[strand].begin(), sortedYCoord[strand].end(), clusters[strand][i].refEnd)    - sortedYCoord[strand].begin() + 1;
-		}
+
+	//printf ("forward: %d, reverse: %d\n", (int) clusters[0].size(), (int) clusters[1].size());
+	if (clusters[0].size() >= ALG_DELIMITER || clusters[1].size() >= ALG_DELIMITER) {
+		//printf ("fnw\n");
+		algorithmFnw(clusters, cluster_data);
+	} else {
+		//printf ("knapsack\n");
+		algorithmKnapsack(clusters, cluster_data);
 	}
+	
 
   //memset(backtrack, -1, sizeof(backtrack));
   //memset(dp, 0, sizeof(dp));
   
-  int **dp = (int **) calloc(STRANDS, sizeof(int));
-  int **backtrack = (int **) calloc(STRANDS, sizeof(int));
-  fnw *F = (fnw *) calloc(STRANDS, sizeof(fnw));
-  fnw_data *bothStrandSols = (fnw_data *) calloc(STRANDS, sizeof(fnw_data));
-  for (int strand = 0; strand < STRANDS; strand++) {
-  	dp[strand] = (int *) calloc(MAXN, sizeof(int));
-  	backtrack[strand] = (int *) calloc(MAXN, sizeof(int));
-  	//memset(backtrack[strand], -1, sizeof(backtrack[strand]));
-  	for (int i = 0; i < MAXN; i++) {
-  		backtrack[strand][i] = -1;
-  	}
-  }
   //memset(backtrack, -1, sizeof(backtrack));
   
   ////#XY printf ("\nsve je memsetano\n");
 	////#XY printf ("forward: %d, reverse: %d\n", clusters[0].size(), clusters[1].size());
   //calculateDP(dp, backtrack, clusters);
-  calculateFNW(F, bothStrandSols, clusters, backtrack);
-  int strand = (bothStrandSols[0].value >= bothStrandSols[1].value) ? 0 : 1;
-  fnw_data sol = std::max(bothStrandSols[0], bothStrandSols[1]);
   
   ////#XY printf ("FNW je izracunat\n");
   ////#XY printf ("strand: %d\n", strand);
@@ -261,52 +419,6 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
 	//printf ("\ncluster_data array size: %d\n", mapping_data->intermediate_mappings.size());
 	//printf ("first region cluster size: %d\n", cluster_data[0].size());
 
-	std::set<int>	done;
-  int curr = sol.index;
-  ////#XY printf ("dobar!\n");
-  
-  //empty_clusters();
-  //return 0;
-  
-  //printf ("ispis rjesenja:\n");
-  while (true) {
-  	if (curr == -1) {
-  		break;
-  	}
-  	if (done.count(curr) > 0) {
-  		printf ("vec obisao!!!!\n");
-  		printf ("\nnumber of regions: %d\n", mapping_data->intermediate_mappings.size());
-  		//empty_clusters();
-  		//return 0;  	
-  	}
-  	done.insert(curr);
-  	int currClusterIndex = curr;
-  	if (curr == backtrack[strand][curr]) {
-  		printf ("sljedeci je bas isti!!!\n");
-  		printf ("\nnumber of regions: %d\n", mapping_data->intermediate_mappings.size());
-  		//empty_clusters();
-  		//return 0;
-  	}
-  	int i = clusters[strand][currClusterIndex].regionI;
-  	int j = clusters[strand][currClusterIndex].clusterJ;
-  	//printf ("i: %d, j: %d\n", i, j);
-		////#XY printf ("curr: %d\n", curr);
-  	/*printf ("readStart: %lld, readEnd: %lld, refStart: %lld, refEnd: %lld, coveredBases: %d, i: %d, j: %d\n",
-  		clusters[strand][currClusterIndex].readStart,
-  		clusters[strand][currClusterIndex].readEnd,
-  		clusters[strand][currClusterIndex].refStart,
-  		clusters[strand][currClusterIndex].refEnd,
-  		clusters[strand][currClusterIndex].coveredBases,
-  		clusters[strand][currClusterIndex].regionI,
-  		clusters[strand][currClusterIndex].clusterJ);*/
-  	////#XY printf ("backtrack[strand][curr]: %d\n", backtrack[strand][curr]);
-  	
-  	cluster_data[i][j]->valid = true;
-  	if (backtrack[strand][curr] == -1) {
-  		break;
-  	}
-  	curr = backtrack[strand][curr];
-  }
   
   //empty_clusters();
 
