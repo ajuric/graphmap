@@ -47,10 +47,16 @@ struct MyCluster {
 	}
 };
 
+#define REFS 100
 #define MAXN 3001
 #define STRANDS 2
 /// popraviti ovaj delimiter!!! na 500
 #define ALG_DELIMITER 500
+
+typedef int alg_t;
+
+const alg_t ALG_FNW = 1;
+const alg_t ALG_KNAPSACK = 2;
 
 struct fnw_data {
 	int index;
@@ -145,7 +151,7 @@ void empty_clusters(std::vector<MyCluster> *clusters) {
   }
 }
 
-void algorithmFnw(std::vector<MyCluster> *clusters, std::vector<Cluster*> *cluster_data) {
+int64_t algorithmFnw(std::vector<MyCluster> *clusters, std::vector<Cluster*> *cluster_data, bool reconstruct) {
 
   std::set<int64_t> xCoord[STRANDS], yCoord[STRANDS];
 
@@ -191,6 +197,14 @@ void algorithmFnw(std::vector<MyCluster> *clusters, std::vector<Cluster*> *clust
   calculateFNW(F, bothStrandSols, clusters, backtrack);
   int strand = (bothStrandSols[0].value >= bothStrandSols[1].value) ? 0 : 1;
   fnw_data sol = std::max(bothStrandSols[0], bothStrandSols[1]);
+
+	// check if reconstruct is needed  
+  if (!reconstruct) {
+		free(backtrack);
+		free(F);
+		free(bothStrandSols);
+		return sol.value;
+  }
   
   // reconstruct used clusters
   std::set<int>	done;
@@ -237,9 +251,10 @@ void algorithmFnw(std::vector<MyCluster> *clusters, std::vector<Cluster*> *clust
   free(backtrack);
   free(F);
   free(bothStrandSols);
+  return sol.value;
 }
 
-void algorithmKnapsack(std::vector<MyCluster> *clusters, std::vector<Cluster*> *cluster_data) {
+int64_t algorithmKnapsack(std::vector<MyCluster> *clusters, std::vector<Cluster*> *cluster_data, bool reconstruct) {
 
 	// prepare data
 	int **dp = (int **) calloc(STRANDS, sizeof(int));
@@ -256,6 +271,14 @@ void algorithmKnapsack(std::vector<MyCluster> *clusters, std::vector<Cluster*> *
   // calculate sol
   calculateDP(dp, backtrack, clusters);
 	int strand = (dp[0][0] > dp[1][0]) ? 0 : 1;
+
+	// check if reconstruct is needed
+	if (!reconstruct) {
+		free(backtrack);
+		int retRes = dp[strand][0];
+	  free(dp);
+	  return retRes;
+	}
 	
 	// reconstruct used clusters
 	std::set<int>	done;
@@ -299,7 +322,9 @@ void algorithmKnapsack(std::vector<MyCluster> *clusters, std::vector<Cluster*> *
   	curr = backtrack[strand][curr];
   }
   free(backtrack);
+  int retRes = dp[strand][0];
   free(dp);
+  return retRes;
 }
 
 // This function filters clusters in different mapping regions, to preserve only the ones which might be construed as valid RNA-seq mappings.
@@ -315,21 +340,23 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
 
   int64_t read_len = read->get_sequence_length();
 
-  std::set<MyCluster> clusterSet[STRANDS];
-	std::vector<MyCluster> clusters[STRANDS];
+  std::set<MyCluster> clusterSet[REFS][STRANDS];
+	std::vector<MyCluster> clusters[REFS][STRANDS];
+	int numRefs = 0;
 	
 	if (mapping_data->intermediate_mappings.size() == 0) {
 		//printf ("aloooo!!! polje vectora je 0!\n");
 		//empty_clusters();
 		return 0;
 	}
-  std::vector<Cluster*> cluster_data[mapping_data->intermediate_mappings.size()];
+  std::vector<Cluster*> cluster_data[REFS][mapping_data->intermediate_mappings.size()];
   //printf ("\npopis clustera po regijama: \n");
   // Clusters are stored in the intermediate mappings. Intermediate mapping corresponds to one processed region on the reference.
   for (int32_t i=0; i<mapping_data->intermediate_mappings.size(); i++) {
     // All info about the region is given here (such as: reference_id, start and end coordinates of the region, etc.).
     Region& region = mapping_data->intermediate_mappings[i]->region_data();
     int64_t ref_id = region.reference_id % indexes[0]->get_num_sequences_forward();     // If there are N indexed sequences, then the index contains 2*N sequences: first N are the forward strand, followed by the same N sequences reverse-complemented. The reference_id is then the absolute reference ID in the index, which means that if it refers to the reverse complement of the sequence, reference_id will be > N. Modulo needs to be taken.
+    numRefs = std::max(numRefs, (int)ref_id);
     int64_t ref_len = indexes[0]->get_reference_lengths()[region.reference_id];
 
     // Each intermediate mapping contains a vector of clusters.
@@ -351,10 +378,10 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
     for (int32_t j=0; j<cluster_vector.size(); j++) {
     	//printf ("\tj: %d\n", j);
       Cluster& cluster = cluster_vector[j];
-			clusterSet[reverseStrand].insert(MyCluster(cluster.query.start, cluster.query.end, cluster.ref.start, cluster.ref.end,
+			clusterSet[ref_id][reverseStrand].insert(MyCluster(cluster.query.start, cluster.query.end, cluster.ref.start, cluster.ref.end,
 					cluster.coverage, i, j));
 			cluster.valid = false;
-			cluster_data[i].push_back(&cluster);
+			cluster_data[ref_id][i].push_back(&cluster);
 			
 			/*printf ("readStart: %lld, readEnd: %lld, refStart: %lld, refEnd: %lld, coveredBases: %d, i: %d, j: %d\n", cluster.query.start, cluster.query.end, cluster.ref.start, cluster.ref.end,
 					cluster.coverage, i, j);*/
@@ -369,37 +396,61 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
       // If the cluster is supposed to be used, set cluster.valid to true, otherwise set it to false (mandatory; it will be true by default).
     }
   }
+
+	// total number of references  
+  numRefs++;
   
   ////#XY printf ("\nprosli sve clustere - krece racunanje\n");
   
 	
 	int emptySets = 0;
-  for (int strand = 0; strand < STRANDS; strand++) {
-  	//printf ("\nclusterSet[%d].size(): %d\n", strand, clusterSet[strand].size());
-  	if (clusterSet[strand].size() == 0) {
-  		emptySets++;
-  		continue;
-  	}
-		for (const MyCluster &cluster : clusterSet[strand]) {
-			clusters[strand].push_back(cluster);
+	for (int ref = 0; ref < numRefs; ref++) {
+		for (int strand = 0; strand < STRANDS; strand++) {
+			//printf ("\nclusterSet[%d].size(): %d\n", strand, clusterSet[strand].size());
+			if (clusterSet[ref][strand].size() == 0) {
+				emptySets++;
+				continue;
+			}
+			for (const MyCluster &cluster : clusterSet[ref][strand]) {
+				clusters[ref][strand].push_back(cluster);
+			}
 		}
 	}
 	
 	////#XY 	printf ("prebacio iz seta u vector\n");
 	
-	if (emptySets == STRANDS) {
+	if (emptySets == (numRefs * STRANDS)) {
 		printf ("izlazim jer nema nista ...\n");
 		//empty_clusters();
 		return 0;
 	}
 
 	//printf ("forward: %d, reverse: %d\n", (int) clusters[0].size(), (int) clusters[1].size());
-	if (clusters[0].size() >= ALG_DELIMITER || clusters[1].size() >= ALG_DELIMITER) {
-		//printf ("fnw\n");
-		algorithmFnw(clusters, cluster_data);
+	int64_t bestMappingRes = -1;
+	int refIdBestMapping = -1;
+	int alg = -1;
+	for (int ref = 0; ref < numRefs; ref++) {
+		if (clusters[ref][0].size() >= ALG_DELIMITER || clusters[ref][1].size() >= ALG_DELIMITER) {
+			int64_t currentRes = algorithmFnw(clusters[ref], cluster_data[ref], false);
+			if (currentRes > bestMappingRes) {
+				bestMappingRes = currentRes;
+				refIdBestMapping = ref;
+				alg = ALG_FNW;
+			}
+		} else {
+			int currentRes = algorithmKnapsack(clusters[ref], cluster_data[ref], false);
+			if (currentRes > bestMappingRes) {
+				bestMappingRes = currentRes;
+				refIdBestMapping = ref;
+				alg = ALG_KNAPSACK;
+			}
+		}
+	}
+	
+	if (alg == ALG_FNW) {
+		algorithmFnw(clusters[refIdBestMapping], cluster_data[refIdBestMapping], true);
 	} else {
-		//printf ("knapsack\n");
-		algorithmKnapsack(clusters, cluster_data);
+		algorithmKnapsack(clusters[refIdBestMapping], cluster_data[refIdBestMapping], true);
 	}
 	
 
