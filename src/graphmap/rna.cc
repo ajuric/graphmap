@@ -51,7 +51,7 @@ struct MyCluster {
 #define MAXN 3001
 #define STRANDS 2
 /// popraviti ovaj delimiter!!! na 500
-#define ALG_DELIMITER 500
+#define ALG_DELIMITER 800
 
 typedef int alg_t;
 
@@ -430,7 +430,7 @@ int GraphMap::RNAFilterClusters_(MappingData* mapping_data, const std::vector<In
 	int refIdBestMapping = -1;
 	int alg = -1;
 	for (int ref = 0; ref < numRefs; ref++) {
-		if (clusters[ref][0].size() >= ALG_DELIMITER || clusters[ref][1].size() >= ALG_DELIMITER) {
+		if ((int)clusters[ref][0].size() + (int)clusters[ref][1].size() >= ALG_DELIMITER) {
 			int64_t currentRes = algorithmFnw(clusters[ref], cluster_data[ref], false);
 			if (currentRes > bestMappingRes) {
 				bestMappingRes = currentRes;
